@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  nginx-iibs2:
+    build: ./nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./:/var/www/html
+    depends_on:
+      - php-iibs2
+    networks:
+      - iibs-network
+
+  php-iibs2:
+    build: ./php
+    volumes:
+      - ./:/var/www/html
+    networks:
+      - iibs-network
+
+  mysql-iibs2:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: php_iibs_db
+      MYSQL_USER: phpuser
+      MYSQL_PASSWORD: secret
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - iibs-network
+
+networks:
+  iibs-network:
+
+volumes:
+  mysql_data:
