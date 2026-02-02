@@ -1,0 +1,194 @@
+# ====================================
+# DEPLOYMENT NGINX
+# ====================================
+# Nginx est le point d'entrée de votre application.
+# Il reçoit les requêtes HTTP et les transmet à PHP-FPM.
+#
+# Architecture :
+#   Internet → Service Nginx → Pods Nginx → Service PHP → Pods PHP → Service MySQL → Pod MySQL
+#
+# Dans Docker Compose, vous exposiez Nginx sur le port 80 :
+#   ports:
+#     - "80:80"
+#
+# Dans Kubernetes, le Service Nginx sera de type NodePort ou LoadBalancer
+# pour être accessible depuis l'extérieur du cluster.
+# ====================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  namespace: php-iibs
+  labels:
+    app: nginx
+    tier: frontend
+spec:
+  # Plusieurs réplicas pour la haute disponibilité
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: nginx
+      tier: frontend
+
+  template:
+    metadata:
+      labels:
+        app: nginx
+        tier: frontend
+    spec:
+      containers:
+      - name: nginx
+        # Comme pour PHP, vous devriez builder et pusher votre image personnalisée
+        # Pour cet exemple, on utilise nginx:alpine et on monte la config
+        image: nginx:alpine
+
+        ports:
+        - containerPort: 80
+          name: http
+
+        # Montage de la configuration Nginx depuis le ConfigMap
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d/default.conf
+          subPath: default.conf  # Monte seulement le fichier default.conf
+        - name: php-files
+          mountPath: /var/www/html
+          readOnly: true  # Nginx lit seulement, ne modifie pas
+
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+
+        # Liveness Probe : Vérifier que Nginx répond
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        # Readiness Probe : Vérifier que Nginx est prêt
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: nginx-config
+      - name: php-files
+        configMap:
+          name: php-files
+
+---
+# ====================================
+# SERVICE NGINX
+# ====================================
+# Ce Service expose Nginx à l'extérieur du cluster.
+#
+# Types de Service pour l'exposition externe :
+#
+# 1. NodePort : Expose le Service sur un port de chaque nœud (30000-32767)
+#    - Accès : http://<node-ip>:<node-port>
+#    - Avantage : Simple, fonctionne partout
+#    - Inconvénient : Port non-standard, pas de load balancing externe
+#
+# 2. LoadBalancer : Crée un load balancer externe (cloud)
+#    - Accès : http://<load-balancer-ip>
+#    - Avantage : Load balancing automatique, IP publique
+#    - Inconvénient : Coûteux, uniquement sur cloud providers
+#
+# 3. Ingress : Règles de routage HTTP/HTTPS (plus avancé)
+#    - Accès : http://votre-domaine.com
+#    - Avantage : Routage par nom de domaine, SSL/TLS, un seul point d'entrée
+#    - Inconvénient : Nécessite un Ingress Controller
+#
+# Pour cet exemple, on utilise NodePort (simple et fonctionne partout)
+# ====================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+  namespace: php-iibs
+  labels:
+    app: nginx
+spec:
+  type: NodePort  # Expose le Service sur un port de chaque nœud
+
+  selector:
+    app: nginx
+    tier: frontend
+
+  ports:
+  - name: http
+    protocol: TCP
+    port: 80              # Port du Service
+    targetPort: 80        # Port du conteneur
+    nodePort: 30080       # Port exposé sur chaque nœud (optionnel, auto-assigné si omis)
+                          # Doit être entre 30000-32767
+
+# ====================================
+# ACCÈS À L'APPLICATION
+# ====================================
+# Une fois déployé, vous pourrez accéder à votre application :
+#
+# 1. Avec Minikube (local) :
+#    minikube service nginx-service -n php-iibs
+#    Ou : http://<minikube-ip>:30080
+#
+# 2. Avec un cluster réel :
+#    http://<node-ip>:30080
+#
+# 3. Si vous voulez utiliser LoadBalancer (cloud) :
+#    Changez "type: NodePort" en "type: LoadBalancer"
+#    Supprimez la ligne "nodePort: 30080"
+#    Kubernetes créera automatiquement un load balancer
+#
+# 4. Si vous voulez utiliser Ingress (recommandé pour production) :
+#    - Installez un Ingress Controller (nginx-ingress, traefik, etc.)
+#    - Créez une ressource Ingress qui pointe vers ce Service
+#    - Vous pourrez alors utiliser un nom de domaine : http://php-iibs.example.com
+# ====================================
+
+---
+# ====================================
+# ALTERNATIVE : SERVICE DE TYPE LOADBALANCER
+# ====================================
+# Décommentez ci-dessous si vous êtes sur un cloud provider (AWS, GCP, Azure)
+# et que vous voulez un load balancer externe avec une IP publique.
+# ====================================
+
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: nginx-service-lb
+#   namespace: php-iibs
+#   labels:
+#     app: nginx
+# spec:
+#   type: LoadBalancer  # Crée un load balancer externe
+#   selector:
+#     app: nginx
+#     tier: frontend
+#   ports:
+#   - name: http
+#     protocol: TCP
+#     port: 80
+#     targetPort: 80
+#   # Sur AWS, vous pouvez ajouter des annotations pour configurer le load balancer :
+#   # annotations:
+#   #   service.beta.kubernetes.io/aws-load-balancer-type: "nlb"

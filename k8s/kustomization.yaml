@@ -1,0 +1,125 @@
+# ====================================
+# KUSTOMIZATION - Gestion de configuration Kubernetes
+# ====================================
+# Kustomize est un outil intégré à kubectl qui permet de :
+# - Organiser et gérer plusieurs fichiers YAML
+# - Déployer toute l'application en une seule commande
+# - Personnaliser les déploiements pour différents environnements (dev, prod)
+# - Éviter la duplication de code
+#
+# Avantages :
+# 1. Déploiement simple : kubectl apply -k k8s/
+# 2. Organisation : Un seul fichier liste tous les composants
+# 3. Ordre de déploiement : Kustomize gère les dépendances
+# 4. Overlays : Créer des variantes (dev/staging/prod) sans dupliquer
+#
+# Sans Kustomize, vous devriez faire :
+#   kubectl apply -f 00-namespace.yaml
+#   kubectl apply -f 01-mysql-secret.yaml
+#   kubectl apply -f 02-nginx-configmap.yaml
+#   ... (un par un)
+#
+# Avec Kustomize :
+#   kubectl apply -k k8s/
+#   (Déploie tout en une commande !)
+# ====================================
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace cible pour toutes les ressources
+# (Évite de répéter "namespace: php-iibs" dans chaque fichier)
+namespace: php-iibs
+
+# Liste des ressources à déployer (dans l'ordre)
+resources:
+  - 00-namespace.yaml
+  - 01-mysql-secret.yaml
+  - 02-nginx-configmap.yaml
+  - 03-mysql-pvc.yaml
+  - 04-mysql-deployment.yaml
+  - 05-php-deployment.yaml
+  - 06-nginx-deployment.yaml
+
+# Labels communs ajoutés à toutes les ressources
+commonLabels:
+  project: php-iibs
+  managed-by: kustomize
+
+# Annotations communes
+commonAnnotations:
+  description: "Application PHP avec Nginx et MySQL"
+  contact: "votre-email@example.com"
+
+# Images : Permet de surcharger les versions des images
+# Utile pour déployer différentes versions sans modifier les YAML
+# images:
+#   - name: nginx
+#     newTag: 1.25-alpine
+#   - name: php
+#     newTag: 8.2-fpm
+#   - name: mysql
+#     newTag: 8.0
+
+# Replicas : Surcharger le nombre de réplicas
+# replicas:
+#   - name: nginx-deployment
+#     count: 3
+#   - name: php-deployment
+#     count: 4
+
+# ConfigMap Generator : Générer des ConfigMaps depuis des fichiers
+# (Alternative à la définition inline dans les YAML)
+# configMapGenerator:
+#   - name: nginx-config
+#     files:
+#       - default.conf=../nginx/default.conf
+
+# Secret Generator : Générer des Secrets depuis des fichiers ou literals
+# secretGenerator:
+#   - name: mysql-secret
+#     literals:
+#       - MYSQL_ROOT_PASSWORD=root
+#       - MYSQL_PASSWORD=secret
+
+# ====================================
+# UTILISATION AVANCÉE : OVERLAYS
+# ====================================
+# Kustomize permet de créer des "overlays" pour différents environnements.
+#
+# Structure recommandée :
+#   k8s/
+#   ├── base/                    # Configuration de base
+#   │   ├── kustomization.yaml
+#   │   ├── mysql-deployment.yaml
+#   │   ├── php-deployment.yaml
+#   │   └── nginx-deployment.yaml
+#   ├── overlays/
+#   │   ├── dev/                 # Configuration pour dev
+#   │   │   ├── kustomization.yaml
+#   │   │   └── replicas-patch.yaml
+#   │   ├── staging/             # Configuration pour staging
+#   │   │   └── kustomization.yaml
+#   │   └── prod/                # Configuration pour production
+#   │       ├── kustomization.yaml
+#   │       ├── replicas-patch.yaml
+#   │       └── resources-patch.yaml
+#
+# Exemple d'overlay dev (k8s/overlays/dev/kustomization.yaml) :
+#   apiVersion: kustomize.config.k8s.io/v1beta1
+#   kind: Kustomization
+#   bases:
+#     - ../../base
+#   replicas:
+#     - name: nginx-deployment
+#       count: 1
+#     - name: php-deployment
+#       count: 1
+#   images:
+#     - name: php
+#       newTag: dev-latest
+#
+# Déploiement :
+#   Dev: kubectl apply -k k8s/overlays/dev/
+#   Prod: kubectl apply -k k8s/overlays/prod/
+# ====================================

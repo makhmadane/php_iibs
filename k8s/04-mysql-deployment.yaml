@@ -1,0 +1,212 @@
+# ====================================
+# DEPLOYMENT - Gestion des Pods et réplicas
+# ====================================
+# Un Deployment est la ressource principale pour déployer des applications dans Kubernetes.
+#
+# Concepts clés :
+#
+# 1. POD : L'unité la plus petite dans Kubernetes
+#    - Contient un ou plusieurs conteneurs
+#    - Partage le réseau et le stockage
+#    - Équivalent à "un ensemble de conteneurs qui tournent ensemble"
+#    - Dans Docker Compose, chaque service devient généralement un Pod
+#
+# 2. REPLICASET : Garantit qu'un nombre X de Pods identiques tournent
+#    - Si un Pod meurt, il en crée un nouveau automatiquement
+#    - Scaling horizontal (augmenter le nombre de réplicas)
+#
+# 3. DEPLOYMENT : Gère les ReplicaSets
+#    - Permet les mises à jour progressives (rolling updates)
+#    - Rollback en cas de problème
+#    - Stratégies de déploiement (recreate, rolling update)
+#
+# Hiérarchie :
+#   Deployment → ReplicaSet → Pod(s) → Container(s)
+#
+# Dans Docker Compose, vous aviez :
+#   mysql-iibs2:
+#     image: mysql:8
+#     environment: [...]
+#
+# C'est simple, mais :
+# - Pas de gestion automatique des pannes
+# - Pas de scaling automatique
+# - Pas de rolling updates
+#
+# Avec Kubernetes Deployment :
+# - Gestion automatique de la haute disponibilité
+# - Redémarrage automatique en cas de panne
+# - Mises à jour sans interruption de service
+# ====================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-deployment
+  namespace: php-iibs
+  labels:
+    app: mysql
+    tier: database
+spec:
+  # Nombre de réplicas (instances) du Pod
+  # Pour MySQL, on garde 1 car c'est une base de données stateful
+  # (Pour une vraie production, utilisez StatefulSet au lieu de Deployment)
+  replicas: 1
+
+  # Sélecteur : Comment le Deployment trouve ses Pods
+  selector:
+    matchLabels:
+      app: mysql
+      tier: database
+
+  # Template : Modèle pour créer les Pods
+  template:
+    metadata:
+      labels:
+        app: mysql
+        tier: database
+    spec:
+      containers:
+      - name: mysql
+        image: mysql:8
+
+        # Ports exposés par le conteneur
+        ports:
+        - containerPort: 3306
+          name: mysql
+
+        # Variables d'environnement depuis le Secret
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: MYSQL_ROOT_PASSWORD
+        - name: MYSQL_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: MYSQL_DATABASE
+        - name: MYSQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: MYSQL_USER
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: MYSQL_PASSWORD
+
+        # Volumes montés dans le conteneur
+        volumeMounts:
+        - name: mysql-storage
+          mountPath: /var/lib/mysql
+
+        # Resources : Limites et requêtes de CPU/RAM
+        # Important pour éviter qu'un pod consomme toutes les ressources du nœud
+        resources:
+          requests:
+            memory: "256Mi"    # Mémoire minimum nécessaire
+            cpu: "250m"        # 0.25 CPU minimum
+          limits:
+            memory: "512Mi"    # Mémoire maximum autorisée
+            cpu: "500m"        # 0.5 CPU maximum
+
+        # Probes : Vérifications de santé du conteneur
+        # Kubernetes utilise ces probes pour savoir si le conteneur est OK
+
+        # livenessProbe : "Est-ce que le conteneur est vivant ?"
+        # Si cette probe échoue, Kubernetes redémarre le conteneur
+        livenessProbe:
+          exec:
+            command:
+            - mysqladmin
+            - ping
+            - -h
+            - localhost
+          initialDelaySeconds: 30  # Attendre 30s avant la première vérification
+          periodSeconds: 10         # Vérifier toutes les 10s
+          timeoutSeconds: 5
+          failureThreshold: 3       # Redémarrer après 3 échecs consécutifs
+
+        # readinessProbe : "Est-ce que le conteneur est prêt à recevoir du trafic ?"
+        # Si cette probe échoue, Kubernetes retire le Pod du Service (pas de trafic)
+        readinessProbe:
+          exec:
+            command:
+            - mysqladmin
+            - ping
+            - -h
+            - localhost
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+      # Volumes : Définition des volumes utilisés par les conteneurs
+      volumes:
+      - name: mysql-storage
+        persistentVolumeClaim:
+          claimName: mysql-pvc  # Référence au PVC créé précédemment
+
+---
+# ====================================
+# SERVICE - Découverte de services et load balancing
+# ====================================
+# Un Service est un point d'accès stable pour communiquer avec des Pods.
+#
+# Problème sans Service :
+# - Les Pods ont des IP dynamiques qui changent à chaque redémarrage
+# - Comment PHP sait-il quelle IP utiliser pour MySQL ?
+#
+# Solution : Le Service
+# - Donne un nom DNS fixe (ex: mysql-service)
+# - Load balance automatiquement entre plusieurs réplicas
+# - Sélectionne les Pods via des labels
+#
+# Dans Docker Compose, vous utilisiez :
+#   depends_on:
+#     - mysql-iibs2
+#
+# Et vous vous connectiez via le nom du service : "mysql-iibs2:3306"
+#
+# Dans Kubernetes, le Service fait la même chose :
+# - Nom DNS : mysql-service.php-iibs.svc.cluster.local
+# - Court : mysql-service (dans le même namespace)
+#
+# Types de Service :
+# - ClusterIP (défaut) : Accessible uniquement dans le cluster
+# - NodePort : Expose sur un port de chaque nœud (30000-32767)
+# - LoadBalancer : Crée un load balancer externe (cloud providers)
+# - ExternalName : Alias vers un DNS externe
+# ====================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+  namespace: php-iibs
+  labels:
+    app: mysql
+spec:
+  # Type ClusterIP : Service accessible uniquement à l'intérieur du cluster
+  # Parfait pour MySQL qui ne doit pas être exposé à l'extérieur
+  type: ClusterIP
+
+  # Sélecteur : Quels Pods ce Service cible
+  # Doit correspondre aux labels du Deployment
+  selector:
+    app: mysql
+    tier: database
+
+  # Ports exposés par le Service
+  ports:
+  - name: mysql
+    protocol: TCP
+    port: 3306        # Port du Service (autres pods utilisent ce port)
+    targetPort: 3306  # Port du conteneur dans le Pod
+
+  # clusterIP: None  # Décommentez pour créer un "Headless Service"
+  # Un Headless Service retourne directement les IPs des Pods
+  # Utile pour les StatefulSets où chaque Pod a une identité
